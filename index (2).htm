@@ -1,0 +1,781 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>How Google Maps Finds Your Route</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;900&family=JetBrains+Mono:wght@500;700&family=Public+Sans:wght@400;600;700&display=swap">
+<style>
+/* Layout concept: a highway gantry. A big green-sign headline sits over a live instrument panel (a routing demo on a synthetic city), then narrative sections laid out like signage: condensed caps, mono data, road-paint dashes. */
+:root {
+  --bg: #ECEEE8;
+  --surface: #F7F8F4;
+  --fg: #14191C;
+  --muted: #566064;
+  --line: #C6CBC1;
+  --sign: #0A6B49;
+  --sign-fg: #F4FAF6;
+  --sign-text: #0A6B49;
+  --paint: #F2B705;
+  --paint-fg: #14191C;
+  --jam: #C9341F;
+  --explore: #2A63CC;
+  --map: #F3F5EF;
+  --casing: #14191C;
+  --r-local: #C3C9BC;
+  --r-art: #98A298;
+  --r-hwy: #0A6B49;
+  --display: 'Big Shoulders Display', 'Arial Narrow', Impact, sans-serif;
+  --body: 'Public Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0F1314; --surface: #171C1E; --fg: #E8ECE6; --muted: #97A19E; --line: #2B3336;
+    --sign: #0E7B56; --sign-fg: #F4FAF6; --sign-text: #4FD0A0; --paint: #F5C32C; --paint-fg: #14191C;
+    --jam: #FF6B55; --explore: #6FA0FF; --map: #12171A; --casing: #0B0E0F;
+    --r-local: #283033; --r-art: #46514F; --r-hwy: #1FA37A;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0F1314; --surface: #171C1E; --fg: #E8ECE6; --muted: #97A19E; --line: #2B3336;
+  --sign: #0E7B56; --sign-fg: #F4FAF6; --sign-text: #4FD0A0; --paint: #F5C32C; --paint-fg: #14191C;
+  --jam: #FF6B55; --explore: #6FA0FF; --map: #12171A; --casing: #0B0E0F;
+  --r-local: #283033; --r-art: #46514F; --r-hwy: #1FA37A;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 1rem/1.6 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0;
+}
+.wrap { max-width: 1120px; margin: 0 auto; }
+a { color: var(--sign-text); text-underline-offset: 3px; }
+:focus-visible { outline: 3px solid var(--paint); outline-offset: 2px; }
+p { margin: 0 0 1em; max-width: 62ch; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+
+.mono { font-family: var(--mono); }
+.kicker { margin: 0 0 14px; }
+.chip {
+  display: inline-block; background: var(--sign); color: var(--sign-fg);
+  font: 700 .72rem/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  padding: 6px 9px; border-radius: 3px;
+}
+
+/* top bar */
+.top { display: flex; align-items: center; gap: 12px; padding-block: 18px; font: 500 .78rem var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.top .shield { width: 26px; height: 26px; background: var(--sign); color: var(--sign-fg); display: grid; place-items: center; border-radius: 50% 50% 50% 4px; font-weight: 700; font-size: .7rem; letter-spacing: 0; }
+
+/* hero */
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px 40px; align-items: end; padding-block: clamp(12px, 3vw, 28px) clamp(24px, 4vw, 40px); }
+h1 { font: 900 clamp(3rem, 10.5vw, 7.6rem)/.92 var(--display); text-transform: uppercase; letter-spacing: -.005em; }
+h1 .panel {
+  display: inline-block; background: var(--sign); color: var(--sign-fg);
+  padding: .02em .16em 0; border-radius: .12em; margin-top: .06em;
+  box-shadow: inset 0 0 0 .05em var(--sign), inset 0 0 0 .1em var(--sign-fg);
+}
+.sub { font-size: clamp(1.05rem, 2.2vw, 1.3rem); color: var(--muted); max-width: 46ch; margin: 18px 0 14px; }
+.tags { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 0; font: 500 .78rem var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+.tags li + li::before { content: "/"; color: var(--paint); margin: 0 10px; font-weight: 700; }
+.budget { border-left: 4px solid var(--paint); padding: 2px 0 2px 16px; }
+.budget b { display: block; font: 900 clamp(3rem, 7vw, 5rem)/.9 var(--display); font-variant-numeric: tabular-nums; }
+.budget span { display: block; font: 500 .75rem/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); max-width: 20ch; margin-top: 6px; }
+
+/* instrument */
+.rig { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: clamp(14px, 2.5vw, 26px); }
+.rig-head { display: flex; flex-wrap: wrap; gap: 6px 24px; align-items: baseline; justify-content: space-between; margin-bottom: 16px; }
+.rig-head h2 { font: 800 clamp(1.8rem, 4vw, 2.6rem)/1 var(--display); text-transform: uppercase; }
+.rig-head p { margin: 0; color: var(--muted); font-size: .94rem; max-width: 56ch; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--bg); }
+.seg button, .btn {
+  min-height: 40px; padding: 8px 13px; border: 0; background: transparent; color: var(--fg);
+  font: 600 .84rem var(--body); cursor: pointer;
+}
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.btn { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.btn:hover, .seg button:hover:not([aria-pressed="true"]) { background: var(--line); }
+.rig-body { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: clamp(14px, 2.4vw, 28px); align-items: start; }
+.mapbox { min-width: 0; }
+canvas#map { display: block; width: 100%; border: 1px solid var(--line); border-radius: 4px; background: var(--map); touch-action: none; cursor: crosshair; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 10px 0 0; padding: 0; list-style: none; font: 500 .72rem var(--mono); letter-spacing: .04em; color: var(--muted); }
+.legend i { display: inline-block; width: 18px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+.readout { min-width: 0; }
+.readout h3 { font: 700 .76rem var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.row {
+  display: grid; gap: 6px; width: 100%; text-align: left; padding: 12px 12px 12px; margin: 0 0 8px;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; font: inherit;
+}
+.row[aria-pressed="true"] { border-color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg); }
+.r-top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.r-name { font: 800 1.35rem/1 var(--display); text-transform: uppercase; letter-spacing: .01em; }
+.r-badge { font: 700 .68rem var(--mono); letter-spacing: .04em; text-transform: uppercase; padding: 3px 6px; border-radius: 3px; background: var(--line); color: var(--fg); }
+.r-badge.ok { background: var(--sign); color: var(--sign-fg); }
+.r-badge.warn { background: var(--paint); color: var(--paint-fg); }
+.r-sub { font-size: .82rem; color: var(--muted); }
+.track { display: block; height: 10px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.fill { display: block; height: 100%; width: 0; background: var(--explore); transition: width .35s ease; }
+.r-stats { display: flex; flex-wrap: wrap; gap: 2px 14px; font: 500 .74rem var(--mono); font-variant-numeric: tabular-nums; }
+.r-stats span:first-child { color: var(--fg); font-weight: 700; }
+.note { font-size: .86rem; color: var(--muted); margin: 6px 0 0; }
+.fine { font-size: .78rem; color: var(--muted); margin: 14px 0 0; max-width: none; }
+
+/* sections */
+section.s { border-top: 1px solid var(--line); padding-block: clamp(44px, 7vw, 92px); }
+h2.big { font: 800 clamp(2.2rem, 5.6vw, 4rem)/.96 var(--display); text-transform: uppercase; margin-bottom: 22px; max-width: 18ch; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(24px, 5vw, 64px); align-items: start; }
+h3.h { font: 800 1.55rem/1.05 var(--display); text-transform: uppercase; color: var(--sign-text); margin-bottom: 10px; }
+.facts { margin: 0; display: grid; gap: 0; }
+.facts div { padding-block: 16px; border-top: 1px solid var(--line); }
+.facts div:last-child { border-bottom: 1px solid var(--line); }
+.facts dt { font: 800 1.7rem/1 var(--display); text-transform: uppercase; color: var(--sign-text); margin-bottom: 6px; }
+.facts dd { margin: 0; color: var(--muted); }
+.lat { display: inline-flex; align-items: baseline; gap: 10px; background: var(--paint); color: var(--paint-fg); padding: 8px 14px; border-radius: 4px; font: 700 .9rem var(--mono); margin: 4px 0 18px; }
+.lat b { font: 900 2rem/1 var(--display); }
+.formula { font: 500 .95rem/1.5 var(--mono); background: var(--surface); border: 1px solid var(--line); padding: 10px 12px; border-radius: 4px; overflow-x: auto; margin: 4px 0 16px; max-width: 100%; }
+.def { margin: 0 0 14px; }
+.def b { color: var(--fg); }
+.figure { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px; overflow-x: auto; }
+.figure svg { display: block; width: 100%; height: auto; min-width: 300px; }
+.figure figcaption { font-size: .82rem; color: var(--muted); margin-top: 8px; }
+svg .t { fill: var(--fg); font: 600 13px var(--body); }
+svg .tm { fill: var(--muted); font: 500 11px var(--mono); }
+svg .tl { fill: var(--muted); font: 400 10.5px var(--body); }
+svg .e { stroke: var(--r-art); stroke-width: 2.5; fill: none; }
+svg .ep { stroke: var(--paint); stroke-width: 6; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+svg .n { fill: var(--surface); stroke: var(--fg); stroke-width: 2; }
+svg .box { fill: var(--bg); stroke: var(--line); stroke-width: 1.5; }
+svg .boxg { fill: var(--sign); stroke: none; }
+svg .tw { fill: var(--sign-fg); font: 700 12px var(--body); }
+svg .ar { stroke: var(--muted); stroke-width: 1.6; fill: none; stroke-dasharray: 5 4; }
+svg .ah { fill: var(--muted); }
+
+.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.col { padding: 0 clamp(14px, 2.4vw, 32px); min-width: 0; }
+.col:first-child { padding-left: 0; }
+.col:last-child { padding-right: 0; }
+.col + .col { border-left: 1px solid var(--line); }
+.col p { color: var(--muted); }
+.col .tag { display: inline-block; font: 700 .7rem var(--mono); letter-spacing: .08em; text-transform: uppercase; padding: 4px 7px; border: 1px solid var(--fg); border-radius: 3px; margin-bottom: 14px; }
+.result { margin-top: 30px; padding: 18px 20px; background: var(--sign); color: var(--sign-fg); border-radius: 6px; box-shadow: inset 0 0 0 4px var(--sign), inset 0 0 0 6px var(--sign-fg); display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; justify-content: space-between; }
+.result p { margin: 0; font-size: 1.08rem; max-width: 60ch; }
+.result a { color: var(--sign-fg); font-weight: 700; }
+.objs { display: grid; }
+.obj { display: grid; grid-template-columns: minmax(150px, 250px) minmax(0, 1fr); gap: 8px 24px; padding-block: 18px; border-top: 1px solid var(--line); align-items: baseline; }
+.obj:last-child { border-bottom: 1px solid var(--line); }
+.obj h3 { font: 800 1.6rem/1 var(--display); text-transform: uppercase; color: var(--sign-text); }
+.obj p { margin: 0; max-width: 64ch; }
+
+.pipe { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); position: relative; }
+.pipe::before { content: ""; position: absolute; top: 16px; left: 0; right: 0; height: 4px; background: repeating-linear-gradient(90deg, var(--paint) 0 16px, transparent 16px 28px); }
+.pipe li { position: relative; padding: 52px 20px 0 0; min-width: 0; }
+.pipe li::before { content: attr(data-n); position: absolute; top: 0; left: 0; width: 36px; height: 36px; border-radius: 50%; background: var(--paint); color: var(--paint-fg); display: grid; place-items: center; font: 700 .95rem var(--mono); }
+.pipe h3 { font: 800 1.4rem/1.05 var(--display); text-transform: uppercase; margin-bottom: 6px; }
+.pipe p { color: var(--muted); font-size: .94rem; margin: 0; }
+.arch { margin-top: 36px; }
+.src { padding-block: 40px 56px; border-top: 1px solid var(--line); font-size: .9rem; color: var(--muted); }
+.src ul { margin: 8px 0 0; padding-left: 1.1em; }
+.src li { margin-bottom: 4px; }
+
+@media (max-width: 900px) {
+  .rig-body, .split, .cols { grid-template-columns: minmax(0, 1fr); }
+  .hero { grid-template-columns: minmax(0, 1fr); }
+  .col, .col:first-child, .col:last-child { padding: 22px 0 0; }
+  .col + .col { border-left: 0; border-top: 1px solid var(--line); margin-top: 22px; }
+  .col:first-child { padding-top: 0; }
+  .obj { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .pipe { grid-template-columns: minmax(0, 1fr); }
+  .pipe::before { top: 0; bottom: 0; left: 16px; right: auto; width: 4px; height: auto; background: repeating-linear-gradient(180deg, var(--paint) 0 16px, transparent 16px 28px); }
+  .pipe li { padding: 0 0 28px 58px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .fill { transition: none; }
+}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><span class="shield" aria-hidden="true">M</span><span>Systems &amp; Algorithms Deep Dive</span></div>
+
+  <header class="hero">
+    <div>
+      <h1>How Google Maps Finds <span class="panel">Your Route</span></h1>
+      <p class="sub">The data, algorithms and real-time infrastructure behind global navigation.</p>
+      <ul class="tags"><li>Graph theory</li><li>Heuristic search</li><li>Real-time machine learning</li></ul>
+    </div>
+    <div class="budget"><b>&lt;10&nbsp;ms</b><span>to compute one route between any two points on Earth</span></div>
+  </header>
+
+  <section class="rig" id="demo" aria-labelledby="demoTitle">
+    <div class="rig-head">
+      <h2 id="demoTitle">Route it yourself</h2>
+      <p>Drag A or B anywhere on this synthetic city. Three searches run on the same road network, and the bars show how many intersections each one had to examine.</p>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Route objective">
+        <button type="button" data-mode="fast" aria-pressed="true">Fastest</button>
+        <button type="button" data-mode="short" aria-pressed="false">Shortest</button>
+        <button type="button" data-mode="nohwy" aria-pressed="false">Avoid highways</button>
+      </div>
+      <div class="seg" role="group" aria-label="Map tool">
+        <button type="button" data-tool="move" aria-pressed="true">Move stops</button>
+        <button type="button" data-tool="jam" aria-pressed="false">Tap roads to jam</button>
+      </div>
+      <button class="btn" type="button" id="rush">Rush hour</button>
+      <button class="btn" type="button" id="clear">Clear jams</button>
+      <button class="btn" type="button" id="trip">Random trip</button>
+      <button class="btn" type="button" id="reseed">New map</button>
+    </div>
+    <div class="rig-body">
+      <div class="mapbox" id="mapbox">
+        <canvas id="map" role="img" aria-label="Road network map with a route from A to B"></canvas>
+        <ul class="legend" aria-hidden="true">
+          <li><i style="background:var(--r-local)"></i>Local street</li>
+          <li><i style="background:var(--r-art)"></i>Arterial</li>
+          <li><i style="background:var(--r-hwy)"></i>Highway link</li>
+          <li><i style="background:var(--explore)"></i>Examined by the search</li>
+          <li><i style="background:var(--paint)"></i>Route</li>
+          <li><i style="background:var(--jam)"></i>Congestion</li>
+        </ul>
+      </div>
+      <div class="readout">
+        <h3>Search effort · pick one to replay</h3>
+        <div id="rows"></div>
+        <p class="note" id="note"></p>
+      </div>
+    </div>
+    <p class="fine"><span id="seed"></span>. Synthetic network of 260 intersections with local streets, arterials and highway links that have ramps every third junction. Rush hour is random congestion here, standing in for predicted speeds. Search times are measured on your device.</p>
+  </section>
+
+  <section class="s" id="scale">
+    <p class="kicker"><span class="chip">Scale</span></p>
+    <h2 class="big">The 10 millisecond problem</h2>
+    <div class="split">
+      <div>
+        <h3 class="h">The core challenge</h3>
+        <p>Compute optimal paths between any two coordinates on Earth in under 10 milliseconds, while navigating billions of constraints.</p>
+        <div class="lat"><b>&lt;10 ms</b> latency budget</div>
+        <p>Routing is not just measuring distance. It optimizes total elapsed time across a road network whose conditions keep changing.</p>
+      </div>
+      <div>
+        <h3 class="h">Scale of the infrastructure</h3>
+        <dl class="facts">
+          <div><dt>Hundreds of millions</dt><dd>of mapped road network segments around the world.</dd></div>
+          <div><dt>Concurrent requests</dt><dd>Millions of routing queries processed every second worldwide.</dd></div>
+          <div><dt>Dynamic variables</dt><dd>Real-time incidents, weather shifts, construction closures and fluctuating traffic speeds.</dd></div>
+        </dl>
+      </div>
+    </div>
+  </section>
+
+  <section class="s" id="graph">
+    <p class="kicker"><span class="chip">Data</span></p>
+    <h2 class="big">Map data as nodes and edges</h2>
+    <div class="split">
+      <div>
+        <h3 class="h">Abstracting the Earth into a graph</h3>
+        <p class="def"><b>Nodes (vertices).</b> Intersections, dead ends, highway ramps and key locations are the discrete connection points.</p>
+        <div class="formula">G = (V, E)</div>
+        <p class="def"><b>Edges (links).</b> Road segments that connect nodes, each carrying a dynamic cost weight <span class="mono">w(e)</span>.</p>
+        <p class="def"><b>Edge weights.</b> Numerical costs calculated from physical distance, speed limits, surface type and turn penalties.</p>
+      </div>
+      <figure class="figure" style="margin:0">
+        <svg viewBox="0 0 420 250" role="img" aria-label="Small graph with six nodes A to F and travel times on each edge. The cheapest path from A to F goes through B and D and costs 15.">
+          <line class="e" x1="50" y1="125" x2="150" y2="50"/>
+          <line class="e" x1="50" y1="125" x2="150" y2="205"/>
+          <line class="e" x1="150" y1="50" x2="150" y2="205"/>
+          <line class="e" x1="150" y1="50" x2="270" y2="65"/>
+          <line class="e" x1="150" y1="205" x2="270" y2="185"/>
+          <line class="e" x1="270" y1="65" x2="270" y2="185"/>
+          <line class="e" x1="270" y1="65" x2="375" y2="125"/>
+          <line class="e" x1="270" y1="185" x2="375" y2="125"/>
+          <polyline class="ep" points="50,125 150,50 270,65 375,125"/>
+          <text class="tm" x="84" y="76" text-anchor="middle">4</text>
+          <text class="tm" x="84" y="180" text-anchor="middle">6</text>
+          <text class="tm" x="132" y="130" text-anchor="end">2</text>
+          <text class="tm" x="210" y="48" text-anchor="middle">5</text>
+          <text class="tm" x="210" y="206" text-anchor="middle">7</text>
+          <text class="tm" x="286" y="130" text-anchor="start">3</text>
+          <text class="tm" x="332" y="80" text-anchor="middle">6</text>
+          <text class="tm" x="332" y="176" text-anchor="middle">4</text>
+          <circle class="n" cx="50" cy="125" r="15"/><text class="t" x="50" y="130" text-anchor="middle">A</text>
+          <circle class="n" cx="150" cy="50" r="15"/><text class="t" x="150" y="55" text-anchor="middle">B</text>
+          <circle class="n" cx="150" cy="205" r="15"/><text class="t" x="150" y="210" text-anchor="middle">C</text>
+          <circle class="n" cx="270" cy="65" r="15"/><text class="t" x="270" y="70" text-anchor="middle">D</text>
+          <circle class="n" cx="270" cy="185" r="15"/><text class="t" x="270" y="190" text-anchor="middle">E</text>
+          <circle class="n" cx="375" cy="125" r="15"/><text class="t" x="375" y="130" text-anchor="middle">F</text>
+        </svg>
+        <figcaption>Edge labels are minutes to traverse, so w(e) is a cost. The cheapest trip from A to F is A, B, D, F at 15. Going through E costs 16 or more.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="s" id="search">
+    <p class="kicker"><span class="chip">Search</span></p>
+    <h2 class="big">Three ways to search the graph</h2>
+    <div class="cols">
+      <div class="col">
+        <span class="tag">Classical</span>
+        <h3 class="h">Dijkstra's algorithm</h3>
+        <p>Explores outward from the origin in expanding concentric circles, like ripples in water. It evaluates every connecting node in turn, which guarantees the mathematical shortest path.</p>
+        <div class="formula">d(v) = min<sub>u∈N(v)</sub> ( d(u) + w(u,v) )</div>
+        <p>The cost is that it explores in all directions equally, including roads that lead away from the destination. A New York to Los Angeles route would examine millions of irrelevant side streets. Accurate, and far too slow for real-time global navigation.</p>
+      </div>
+      <div class="col">
+        <span class="tag">Heuristic</span>
+        <h3 class="h">A* heuristic search</h3>
+        <p>Adds a directional heuristic <span class="mono">h(n)</span> that estimates the distance to the destination, which pulls the search straight toward the target.</p>
+        <div class="formula">f(n) = g(n) + h(n)</div>
+        <p>Here <span class="mono">g(n)</span> is the cost paid so far and <span class="mono">h(n)</span> is the optimistic estimate of what remains. Roads leading away from the target look expensive, so they wait in the queue.</p>
+      </div>
+      <div class="col">
+        <span class="tag">Precomputed</span>
+        <h3 class="h">Contraction hierarchies</h3>
+        <p>Precomputes "shortcut" edges across major highway networks, so queries can skip local street networks on long journeys.</p>
+        <p>The demo above does not build real shortcuts. Its third search approximates the effect by ignoring local streets that are far from both A and B, which is why its route can cost slightly more.</p>
+      </div>
+    </div>
+    <div class="result">
+      <p>Combining heuristics with a multi-level graph hierarchy reduces explored nodes from millions to a few hundred, which is what makes sub-millisecond queries possible.</p>
+      <a href="#demo">Compare them in the demo</a>
+    </div>
+  </section>
+
+  <section class="s" id="traffic">
+    <p class="kicker"><span class="chip">Live data</span></p>
+    <h2 class="big">Predicting traffic with machine learning</h2>
+    <div class="split">
+      <div>
+        <h3 class="h">Real-time data integration</h3>
+        <p>Anonymized location telemetry from mobile devices provides live velocity data across global road networks.</p>
+        <p class="def"><b>Graph neural networks.</b> Deep learning models predict near-future traffic flow by analyzing temporal patterns and network dependencies.</p>
+        <p class="def"><b>Dynamic re-weighting.</b> Edge weights update every few seconds to reflect actual traversal speed rather than static limits.</p>
+      </div>
+      <div>
+        <h3 class="h">See a re-weight happen</h3>
+        <p>Slower edges cost more, so the cheapest path moves. Trigger congestion along the current route and watch the search choose a detour.</p>
+        <button class="btn" type="button" id="rush2">Jam the route and reroute</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="s" id="objectives">
+    <p class="kicker"><span class="chip">Objectives</span></p>
+    <h2 class="big">Multi-objective optimization</h2>
+    <div class="objs">
+      <div class="obj"><h3>Eco-friendly routing</h3><p>Calculates fuel and energy consumption using terrain elevation, incline gradients and consistent vehicle speed profiles.</p></div>
+      <div class="obj"><h3>User preferences &amp; safety</h3><p>Lets drivers bypass tolls, ferries, tricky left turns across multi-lane traffic or high-hazard zones. In the demo, "Avoid highways" removes the highway links from the search.</p></div>
+      <div class="obj"><h3>Traffic load balancing</h3><p>Prevents "routing storms" by distributing traffic across multiple parallel corridors rather than sending all drivers down one narrow shortcut.</p></div>
+    </div>
+  </section>
+
+  <section class="s" id="pipeline">
+    <p class="kicker"><span class="chip">Pipeline</span></p>
+    <h2 class="big">End-to-end navigation pipeline</h2>
+    <ol class="pipe">
+      <li data-n="1"><h3>Graph construction</h3><p>Raw GIS road data parsed into directed graphs G = (V, E).</p></li>
+      <li data-n="2"><h3>Precomputation</h3><p>Contraction hierarchies build multi-tier highway shortcuts.</p></li>
+      <li data-n="3"><h3>Live GNN updates</h3><p>Mobile telemetry re-weights edges with dynamic travel times.</p></li>
+      <li data-n="4"><h3>Fast A* execution</h3><p>Sub-10 ms query execution returns an optimal, customized path.</p></li>
+    </ol>
+
+    <figure class="figure arch" style="margin-top:44px">
+      <svg viewBox="0 0 1000 310" role="img" aria-label="High-level architecture: data ingestion feeds storage and indexing, which feeds the rendering engine, search and geocoding, and routing module. The real-time traffic system feeds the routing module. All three outputs go through CDN edge caches to the client device.">
+        <defs><marker id="ahd" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path class="ah" d="M0 0 L8 4 L0 8z"/></marker></defs>
+        <path class="ar" marker-end="url(#ahd)" d="M110 120 H198"/>
+        <path class="ar" marker-end="url(#ahd)" d="M330 112 H385 V45 H438"/>
+        <path class="ar" marker-end="url(#ahd)" d="M330 120 H438"/>
+        <path class="ar" marker-end="url(#ahd)" d="M330 128 H385 V195 H438"/>
+        <path class="ar" marker-end="url(#ahd)" d="M570 45 H660 V105 H688"/>
+        <path class="ar" marker-end="url(#ahd)" d="M570 120 H688"/>
+        <path class="ar" marker-end="url(#ahd)" d="M570 195 H660 V135 H688"/>
+        <path class="ar" marker-end="url(#ahd)" d="M800 120 H898"/>
+        <path class="ar" marker-end="url(#ahd)" d="M505 255 V224"/>
+        <text class="tl" x="154" y="112" text-anchor="middle">ingest data</text>
+        <text class="tl" x="412" y="38" text-anchor="middle">map tiles</text>
+        <text class="tl" x="384" y="113" text-anchor="middle">location data</text>
+        <text class="tl" x="412" y="188" text-anchor="middle">graph data</text>
+        <text class="tl" x="615" y="38" text-anchor="middle">rendered tiles</text>
+        <text class="tl" x="629" y="113" text-anchor="middle">search results</text>
+        <text class="tl" x="615" y="188" text-anchor="middle">route responses</text>
+        <text class="tl" x="849" y="112" text-anchor="middle">deliver content</text>
+        <text class="tl" x="515" y="244" text-anchor="start">traffic updates</text>
+        <rect class="box" x="10" y="95" width="100" height="50" rx="4"/><text class="t" x="60" y="124" text-anchor="middle">Data ingestion</text>
+        <rect class="box" x="200" y="95" width="130" height="50" rx="4"/><text class="t" x="265" y="124" text-anchor="middle">Storage and indexing</text>
+        <rect class="box" x="440" y="20" width="130" height="50" rx="4"/><text class="t" x="505" y="49" text-anchor="middle">Rendering engine</text>
+        <rect class="box" x="440" y="95" width="130" height="50" rx="4"/><text class="t" x="505" y="124" text-anchor="middle">Search and geocoding</text>
+        <rect class="boxg" x="440" y="170" width="130" height="50" rx="4"/><text class="tw" x="505" y="199" text-anchor="middle">Routing module</text>
+        <rect class="box" x="440" y="257" width="130" height="44" rx="4"/><text class="t" x="505" y="283" text-anchor="middle">Real-time traffic</text>
+        <rect class="box" x="690" y="95" width="110" height="50" rx="4"/><text class="t" x="745" y="124" text-anchor="middle">CDN edge caches</text>
+        <rect class="box" x="900" y="95" width="90" height="50" rx="4"/><text class="t" x="945" y="124" text-anchor="middle">Client device</text>
+      </svg>
+      <figcaption>High-level architecture of a maps platform. The routing module combines the stored road graph with live traffic updates, then returns responses through edge caches to the device.</figcaption>
+    </figure>
+  </section>
+
+  <section class="s" id="anatomy">
+    <p class="kicker"><span class="chip">Summary</span></p>
+    <h2 class="big">The anatomy of modern routing</h2>
+    <div class="cols">
+      <div class="col"><h3 class="h">Representation</h3><p>Discrete graph structures model physical road geometry, turn rules, speed constraints and vehicular connectivity.</p></div>
+      <div class="col"><h3 class="h">Speed &amp; scale</h3><p>Precomputed contraction hierarchies and A* heuristic search reduce billions of potential roads to a focused search space.</p></div>
+      <div class="col"><h3 class="h">Predictive intelligence</h3><p>Machine learning transforms static distance calculations into real-time, predictive time optimization at planetary scale.</p></div>
+    </div>
+  </section>
+
+  <footer class="src">
+    <strong>Image sources from the original deck</strong>
+    <ul>
+      <li>Architecture diagram: <a href="https://www.systemdesignhandbook.com" rel="noopener">systemdesignhandbook.com</a></li>
+      <li>Traffic prediction imagery: <a href="https://deepmind.google" rel="noopener">deepmind.google</a></li>
+    </ul>
+    <p style="margin-top:16px">The architecture figure above is redrawn from the first source. Scale figures are rounded estimates carried over from the deck.</p>
+  </footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var COLS = 20, ROWS = 13, CELL = 0.7, WORLD_W = COLS * CELL, WORLD_H = ROWS * CELL;
+  var SPEED = { 0: 30, 1: 50, 2: 110 };
+  var PRUNE_R = 2.4;
+  var nodes = [], edges = [], adj = [], jam = [];
+  var seed = 417, A = 0, B = 0, mode = 'fast', tool = 'move', algo = 'astar';
+  var results = null, anim = null, raf = 0, S = 40, W = 0, H = 0, dpr = 1;
+  var cv = document.getElementById('map'), ctx = cv.getContext('2d');
+  var box = document.getElementById('mapbox');
+  var cs = getComputedStyle(document.documentElement);
+  function tok(n) { return cs.getPropertyValue(n).trim(); }
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  function nid(c, r) { return r * COLS + c; }
+  function dist(i, j) { return Math.hypot(nodes[i].x - nodes[j].x, nodes[i].y - nodes[j].y); }
+
+  function build(sd) {
+    var rnd = mulberry32(sd), r, c, i, j;
+    nodes = []; edges = []; adj = []; jam = [];
+    for (r = 0; r < ROWS; r++) for (c = 0; c < COLS; c++) {
+      nodes.push({ x: (c + 0.5 + (rnd() - 0.5) * 0.55) * CELL, y: (r + 0.5 + (rnd() - 0.5) * 0.55) * CELL, c: c, r: r, hw: false });
+      adj.push([]);
+    }
+    var cand = [];
+    for (r = 0; r < ROWS; r++) for (c = 0; c < COLS; c++) {
+      if (c + 1 < COLS) cand.push([nid(c, r), nid(c + 1, r), (r % 4 === 1) ? 1 : 0]);
+      if (r + 1 < ROWS) cand.push([nid(c, r), nid(c, r + 1), (c % 5 === 2) ? 1 : 0]);
+    }
+    var parent = nodes.map(function (_, k) { return k; });
+    function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+    for (i = cand.length - 1; i > 0; i--) { j = Math.floor(rnd() * (i + 1)); var tmp = cand[i]; cand[i] = cand[j]; cand[j] = tmp; }
+    var keep = [];
+    cand.forEach(function (e) { if (e[2] === 1) { keep.push(e); var a = find(e[0]), b = find(e[1]); if (a !== b) parent[a] = b; } });
+    cand.forEach(function (e) {
+      if (e[2] !== 0) return;
+      var a = find(e[0]), b = find(e[1]);
+      if (a !== b) { parent[a] = b; keep.push(e); } else if (rnd() < 0.84) keep.push(e);
+    });
+    [3, 9].forEach(function (rr) { for (var cc = 0; cc + 3 < COLS; cc += 3) keep.push([nid(cc, rr), nid(cc + 3, rr), 2]); });
+    [6, 15].forEach(function (cc) { for (var rr = 0; rr + 3 < ROWS; rr += 3) keep.push([nid(cc, rr), nid(cc, rr + 3), 2]); });
+    keep.forEach(function (k, idx) {
+      var a = nodes[k[0]], b = nodes[k[1]];
+      edges.push({ i: idx, a: k[0], b: k[1], len: Math.hypot(a.x - b.x, a.y - b.y), cls: k[2], speed: SPEED[k[2]] });
+      adj[k[0]].push(idx); adj[k[1]].push(idx); jam.push(1);
+      if (k[2] === 2) { a.hw = true; b.hw = true; }
+    });
+    A = nid(1, 11); B = nid(18, 2);
+  }
+
+  function Heap() { this.k = []; this.v = []; }
+  Heap.prototype.push = function (key, val) {
+    var k = this.k, v = this.v, i = k.length;
+    k.push(key); v.push(val);
+    while (i > 0) { var p = (i - 1) >> 1; if (k[p] <= key) break; k[i] = k[p]; v[i] = v[p]; i = p; }
+    k[i] = key; v[i] = val;
+  };
+  Heap.prototype.pop = function () {
+    var k = this.k, v = this.v, top = v[0], lk = k.pop(), lv = v.pop(), n = k.length;
+    if (n > 0) {
+      var i = 0;
+      while (true) {
+        var l = 2 * i + 1; if (l >= n) break;
+        var r = l + 1, m = (r < n && k[r] < k[l]) ? r : l;
+        if (k[m] >= lk) break;
+        k[i] = k[m]; v[i] = v[m]; i = m;
+      }
+      k[i] = lk; v[i] = lv;
+    }
+    return top;
+  };
+  Object.defineProperty(Heap.prototype, 'size', { get: function () { return this.k.length; } });
+
+  function cost(e) { return mode === 'short' ? e.len : e.len / e.speed * 60 * jam[e.i]; }
+
+  function search(kind, s, t) {
+    var t0 = performance.now(), n = nodes.length;
+    var g = new Float64Array(n).fill(Infinity), prev = new Int32Array(n).fill(-1), done = new Uint8Array(n);
+    var order = [], heap = new Heap();
+    var f = mode === 'short' ? 1 : (mode === 'fast' ? 60 / 110 : 60 / 50);
+    var useH = kind !== 'dijkstra', prune = kind === 'hier';
+    function hf(v) { return useH ? dist(v, t) * f : 0; }
+    function near(v) { return dist(v, s) < PRUNE_R || dist(v, t) < PRUNE_R; }
+    g[s] = 0; heap.push(hf(s), s);
+    while (heap.size) {
+      var u = heap.pop();
+      if (done[u]) continue;
+      done[u] = 1; order.push(u);
+      if (u === t) break;
+      var list = adj[u];
+      for (var q = 0; q < list.length; q++) {
+        var e = edges[list[q]];
+        if (mode === 'nohwy' && e.cls === 2) continue;
+        var v = e.a === u ? e.b : e.a;
+        if (done[v]) continue;
+        if (prune && e.cls === 0 && !near(u) && !near(v)) continue;
+        var ng = g[u] + cost(e);
+        if (ng < g[v]) { g[v] = ng; prev[v] = e.i; heap.push(ng + hf(v), v); }
+      }
+    }
+    if (!done[t]) return null;
+    var path = [t], cur = t, dk = 0, tm = 0;
+    while (cur !== s) {
+      var pe = edges[prev[cur]];
+      dk += pe.len; tm += pe.len / pe.speed * 60 * jam[pe.i];
+      cur = pe.a === cur ? pe.b : pe.a; path.push(cur);
+    }
+    path.reverse();
+    return { kind: kind, order: order, path: path, cost: g[t], distKm: dk, timeMin: tm, ms: performance.now() - t0, fallback: false };
+  }
+
+  function runAll() {
+    var d = search('dijkstra', A, B), a = search('astar', A, B), h = search('hier', A, B);
+    if (!h) { h = search('astar', A, B); h.fallback = true; }
+    results = { dijkstra: d, astar: a, hier: h };
+    updateRows();
+    var r = results[algo];
+    cv.setAttribute('aria-label', 'Road network map. Route from A to B takes ' + r.timeMin.toFixed(1) + ' minutes over ' + r.distKm.toFixed(1) + ' kilometers.');
+  }
+
+  /* readout */
+  var NAMES = {
+    dijkstra: ['Dijkstra', 'Looks in every direction'],
+    astar: ['A*', 'Leans toward point B'],
+    hier: ['Hierarchy-pruned A*', 'Skips side streets far from A and B']
+  };
+  var rowsEl = document.getElementById('rows'), rowEls = {};
+  ['dijkstra', 'astar', 'hier'].forEach(function (k) {
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'row'; b.setAttribute('data-algo', k); b.setAttribute('aria-pressed', 'false');
+    b.innerHTML = '<span class="r-top"><span class="r-name">' + NAMES[k][0] + '</span><span class="r-badge"></span></span>' +
+      '<span class="r-sub">' + NAMES[k][1] + '</span>' +
+      '<span class="track"><span class="fill"></span></span>' +
+      '<span class="r-stats"><span data-k="nodes"></span><span data-k="route"></span><span data-k="ms"></span></span>';
+    rowsEl.appendChild(b);
+    rowEls[k] = { el: b, badge: b.querySelector('.r-badge'), fill: b.querySelector('.fill'), nodes: b.querySelector('[data-k=nodes]'), route: b.querySelector('[data-k=route]'), ms: b.querySelector('[data-k=ms]') };
+    b.addEventListener('click', function () { algo = k; syncRows(); play(); });
+  });
+  function syncRows() { Object.keys(rowEls).forEach(function (k) { rowEls[k].el.setAttribute('aria-pressed', k === algo ? 'true' : 'false'); }); }
+  function updateRows() {
+    var d = results.dijkstra, total = nodes.length;
+    Object.keys(rowEls).forEach(function (k) {
+      var r = results[k], re = rowEls[k];
+      re.fill.style.width = (r.order.length / total * 100).toFixed(1) + '%';
+      re.nodes.textContent = r.order.length + ' of ' + total + ' nodes';
+      re.route.textContent = (mode === 'short' ? r.distKm.toFixed(1) + ' km · ' + r.timeMin.toFixed(1) + ' min' : r.timeMin.toFixed(1) + ' min · ' + r.distKm.toFixed(1) + ' km');
+      re.ms.textContent = (r.ms < 0.1 ? '<0.1' : r.ms.toFixed(1)) + ' ms';
+      var delta = (r.cost / d.cost - 1) * 100;
+      re.badge.className = 'r-badge';
+      if (k === 'dijkstra') { re.badge.textContent = 'Baseline'; }
+      else if (r.fallback) { re.badge.textContent = 'Fell back to A*'; re.badge.classList.add('warn'); }
+      else if (delta < 0.05) { re.badge.textContent = 'Same cost'; re.badge.classList.add('ok'); }
+      else { re.badge.textContent = '+' + delta.toFixed(1) + '% cost'; re.badge.classList.add('warn'); }
+    });
+    var pa = Math.round(results.astar.order.length / d.order.length * 100);
+    var ph = Math.round(results.hier.order.length / d.order.length * 100);
+    document.getElementById('note').textContent = 'A* examined ' + pa + '% of the nodes Dijkstra did, and the hierarchy search ' + ph + '%. On a real continental network the gap grows from percentages to orders of magnitude.';
+    syncRows();
+  }
+
+  /* drawing */
+  function resize() {
+    var w = box.clientWidth; if (!w) return;
+    S = w / WORLD_W; H = WORLD_H * S; W = w; dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cv.width = Math.round(w * dpr); cv.height = Math.round(H * dpr); cv.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw();
+  }
+  function marker(n, label, fill, fg) {
+    var x = nodes[n].x * S, y = nodes[n].y * S;
+    ctx.beginPath(); ctx.arc(x, y, 13, 0, 6.2832); ctx.fillStyle = fill; ctx.fill();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = tok('--map'); ctx.stroke();
+    ctx.fillStyle = fg; ctx.font = '700 13px ' + 'Public Sans, system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(label, x, y + 0.5);
+  }
+  function draw() {
+    if (!results || !W) return;
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    var R = results[algo], k = R.order.length, showRoute = true, i;
+    if (anim) {
+      var p = Math.min(1, (performance.now() - anim.t0) / anim.dur);
+      k = Math.floor(R.order.length * p); showRoute = p >= 1;
+      if (p >= 1) anim = null; else raf = requestAnimationFrame(draw);
+    }
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = tok('--map'); ctx.fillRect(0, 0, W, H);
+    ctx.lineCap = 'round';
+    var widths = [1.3, 2.4, 3.6], cols = [tok('--r-local'), tok('--r-art'), tok('--r-hwy')];
+    for (var cl = 0; cl < 3; cl++) {
+      ctx.lineWidth = widths[cl]; ctx.strokeStyle = cols[cl];
+      if (cl === 2 && mode === 'nohwy') { ctx.globalAlpha = 0.3; ctx.setLineDash([4, 5]); }
+      ctx.beginPath();
+      for (i = 0; i < edges.length; i++) {
+        var e = edges[i]; if (e.cls !== cl) continue;
+        ctx.moveTo(nodes[e.a].x * S, nodes[e.a].y * S); ctx.lineTo(nodes[e.b].x * S, nodes[e.b].y * S);
+      }
+      ctx.stroke(); ctx.globalAlpha = 1; ctx.setLineDash([]);
+    }
+    ctx.strokeStyle = tok('--jam');
+    for (i = 0; i < edges.length; i++) {
+      if (jam[i] <= 1) continue;
+      var je = edges[i];
+      ctx.globalAlpha = Math.min(1, 0.4 + (jam[i] - 1) / 5 * 0.6); ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(nodes[je.a].x * S, nodes[je.a].y * S); ctx.lineTo(nodes[je.b].x * S, nodes[je.b].y * S); ctx.stroke();
+    }
+    ctx.globalAlpha = 0.55; ctx.fillStyle = tok('--explore');
+    for (i = 0; i < k; i++) { var nn = nodes[R.order[i]]; ctx.beginPath(); ctx.arc(nn.x * S, nn.y * S, 3.1, 0, 6.2832); ctx.fill(); }
+    ctx.globalAlpha = 1;
+    if (showRoute) {
+      ctx.lineJoin = 'round';
+      [[9, tok('--casing')], [5.5, tok('--paint')]].forEach(function (st) {
+        ctx.lineWidth = st[0]; ctx.strokeStyle = st[1]; ctx.beginPath();
+        R.path.forEach(function (n, idx) { var pt = nodes[n]; if (idx === 0) ctx.moveTo(pt.x * S, pt.y * S); else ctx.lineTo(pt.x * S, pt.y * S); });
+        ctx.stroke();
+      });
+    }
+    marker(A, 'A', tok('--sign'), '#F4FAF6');
+    marker(B, 'B', tok('--fg'), tok('--bg'));
+  }
+  function play() {
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce) { anim = null; draw(); return; }
+    var n = results[algo].order.length;
+    anim = { t0: performance.now(), dur: Math.min(1500, 450 + n * 4) };
+    draw();
+  }
+
+  /* interaction */
+  function pos(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * WORLD_W, y: (e.clientY - r.top) / r.height * WORLD_H }; }
+  function nearest(p) {
+    var best = 0, bd = Infinity;
+    for (var i = 0; i < nodes.length; i++) { var d = Math.hypot(nodes[i].x - p.x, nodes[i].y - p.y); if (d < bd) { bd = d; best = i; } }
+    return best;
+  }
+  function segDist(p, a, b) {
+    var dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy, t = l2 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+  }
+  var drag = null, moved = false, pending = false;
+  function schedule() {
+    if (pending) return; pending = true;
+    requestAnimationFrame(function () { pending = false; runAll(); anim = null; draw(); });
+  }
+  function moveMarker(p) {
+    var n = nearest(p), cur = drag === 'A' ? A : B, other = drag === 'A' ? B : A;
+    if (n === cur || n === other) return;
+    if (drag === 'A') A = n; else B = n;
+    moved = true; schedule();
+  }
+  function toggleJam(p) {
+    var best = -1, bd = 0.45;
+    for (var i = 0; i < edges.length; i++) { var d = segDist(p, nodes[edges[i].a], nodes[edges[i].b]); if (d < bd) { bd = d; best = i; } }
+    if (best < 0) return;
+    jam[best] = jam[best] > 1 ? 1 : 6;
+    runAll(); play();
+  }
+  cv.addEventListener('pointerdown', function (e) {
+    var p = pos(e);
+    if (tool === 'jam') { toggleJam(p); return; }
+    var dA = Math.hypot(nodes[A].x - p.x, nodes[A].y - p.y), dB = Math.hypot(nodes[B].x - p.x, nodes[B].y - p.y);
+    drag = dA <= dB ? 'A' : 'B'; moved = false;
+    try { cv.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    moveMarker(p);
+  });
+  cv.addEventListener('pointermove', function (e) { if (drag) moveMarker(pos(e)); });
+  function endDrag() { if (!drag) return; drag = null; if (moved) { moved = false; setTimeout(function () { runAll(); play(); }, 30); } }
+  cv.addEventListener('pointerup', endDrag);
+  cv.addEventListener('pointercancel', endDrag);
+
+  function setPressed(sel, attr, val) {
+    Array.prototype.forEach.call(document.querySelectorAll(sel), function (b) { b.setAttribute('aria-pressed', b.getAttribute(attr) === val ? 'true' : 'false'); });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('[data-mode]'), function (b) {
+    b.addEventListener('click', function () { mode = b.getAttribute('data-mode'); setPressed('[data-mode]', 'data-mode', mode); runAll(); play(); });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-tool]'), function (b) {
+    b.addEventListener('click', function () { tool = b.getAttribute('data-tool'); setPressed('[data-tool]', 'data-tool', tool); cv.style.cursor = tool === 'jam' ? 'pointer' : 'crosshair'; });
+  });
+  function rush() {
+    var path = results.astar.path.slice(1, -1), centers = [];
+    if (path.length < 4) path = nodes.map(function (_, i) { return i; });
+    for (var c = 0; c < 3; c++) centers.push(nodes[path[Math.floor(Math.random() * path.length)]]);
+    for (var i = 0; i < jam.length; i++) {
+      var e = edges[i], mx = (nodes[e.a].x + nodes[e.b].x) / 2, my = (nodes[e.a].y + nodes[e.b].y) / 2;
+      centers.forEach(function (ct) {
+        var d = Math.hypot(mx - ct.x, my - ct.y);
+        if (d < 2.2) jam[i] = Math.max(jam[i], 1 + (1 - d / 2.2) * (3 + Math.random() * 2));
+      });
+    }
+    runAll(); play();
+  }
+  document.getElementById('rush').addEventListener('click', rush);
+  document.getElementById('rush2').addEventListener('click', function () {
+    document.getElementById('demo').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(rush, 450);
+  });
+  document.getElementById('clear').addEventListener('click', function () { jam.fill(1); runAll(); play(); });
+  document.getElementById('trip').addEventListener('click', function () {
+    var s, t, tries = 0;
+    do { s = Math.floor(Math.random() * nodes.length); t = Math.floor(Math.random() * nodes.length); tries++; } while (dist(s, t) < 7 && tries < 200);
+    A = s; B = t; runAll(); play();
+  });
+  function pad4(n) { return ('0000' + n).slice(-4); }
+  function setSeedLabel() { document.getElementById('seed').textContent = 'Map seed ' + pad4(seed); }
+  document.getElementById('reseed').addEventListener('click', function () {
+    seed = 1 + Math.floor(Math.random() * 9998); build(seed); setSeedLabel(); runAll(); play();
+  });
+
+  /* start */
+  build(seed); setSeedLabel(); runAll(); resize();
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(resize).observe(box); else window.addEventListener('resize', resize);
+  if (window.matchMedia) {
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    if (mq.addEventListener) mq.addEventListener('change', draw);
+  }
+  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
+})();
+</script>
+</body>
+</html>
